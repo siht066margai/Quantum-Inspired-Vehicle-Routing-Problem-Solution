@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2026-09-07T14:36:40.122051+05:30 by Eclipse SUMO sumo 1.27.1
+<sumoConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="C:\SIH_Traffic_Project\2026-09-07-14-34-19\osm.net.xml.gz"/>
+        <route-files value="C:\SIH_Traffic_Project\2026-09-07-14-34-19\trips.trips.xml"/>
+        <additional-files value="C:\SIH_Traffic_Project\2026-09-07-14-34-19\osm_stops.add.xml"/>
+    </input>
+
+    <output>
+        <vehroute-output value="C:\SIH_Traffic_Project\2026-09-07-14-34-19\vehroutes.xml"/>
+        <stop-output value="C:\SIH_Traffic_Project\2026-09-07-14-34-19\stopinfos.xml"/>
+    </output>
+
+    <time>
+        <begin value="0.0"/>
+    </time>
+
+    <processing>
+        <ignore-route-errors value="true"/>
+        <time-to-teleport.disconnected value="0"/>
+        <default.departspeed value="0"/>
+    </processing>
+
+    <routing>
+        <device.rerouting.adaptation-interval value="0"/>
+    </routing>
+
+    <report>
+        <aggregate-warnings value="5"/>
+        <error-log value="C:\SIH_Traffic_Project\2026-09-07-14-34-19\trips.trips.xml.errorlog"/>
+        <no-step-log value="true"/>
+    </report>
+
+</sumoConfiguration>
+-->
+
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+</routes>
