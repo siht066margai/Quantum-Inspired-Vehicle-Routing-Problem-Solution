@@ -164,10 +164,12 @@ $$\min_{\pi} \left[ \text{Cost}_{G(t)}(O \rightarrow C_{\pi(1)}) + \sum_{k=1}^{N
 
 ### 1. Launch Project Server
 ```cmd
+cd 2026-09-07-14-34-19
 run.bat
 ```
 *Or via command line:*
 ```bash
+cd 2026-09-07-14-34-19
 python -m uvicorn backend.api.server:app --reload --port 8000
 ```
 Navigate to: **`http://localhost:8000`**
@@ -176,6 +178,7 @@ Navigate to: **`http://localhost:8000`**
 To verify all VRP solvers, dynamic graph transformations, snapshot timestamps, and real-time rerouting:
 
 ```bash
+cd 2026-09-07-14-34-19
 python -m unittest discover -s tests -p "test_*.py"
 ```
 *All 23 test cases should report `OK`.*
