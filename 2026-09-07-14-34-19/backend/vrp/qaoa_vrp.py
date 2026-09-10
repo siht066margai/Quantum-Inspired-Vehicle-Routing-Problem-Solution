@@ -299,13 +299,10 @@ class QAOAVRPSolver:
         """Precomputes normalized QUBO energy for all 2^N bitstrings for fast evaluation."""
         n = len(linear)
         num_states = 1 << n
-        energies = np.zeros(num_states, dtype=float)
-
-        for state in range(num_states):
-            x = np.array([(state >> k) & 1 for k in range(n)], dtype=float)
-            energies[state] = float(np.dot(linear, x) + x.T @ Q @ x)
-
-        return energies
+        x_all = np.array([[(state >> k) & 1 for k in range(n)] for state in range(num_states)], dtype=float)
+        linear_term = x_all @ linear
+        quad_term = np.sum((x_all @ Q) * x_all, axis=1)
+        return linear_term + quad_term
 
     def _optimize_qaoa_parameters(
         self,

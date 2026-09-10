@@ -6,6 +6,10 @@
     <title>SIH 2026 — Dynamic Traffic Route Optimization Platform</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- KaTeX for clean LaTeX mathematical rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -50,8 +54,7 @@
                     <div class="tool-group">
                         <label>VRP Pickers:</label>
                         <button id="btn-pick-origin" class="btn btn-outline btn-sm">📍 Pick Depot (O)</button>
-                        <button id="btn-pick-c1" class="btn btn-outline btn-sm">📦 Pick Customer 1 (C1)</button>
-                        <button id="btn-pick-c2" class="btn btn-outline btn-sm">📦 Pick Customer 2 (C2)</button>
+                        <button id="btn-pick-customer" class="btn btn-outline btn-sm">📦 Pick Active Customer</button>
                         <button id="btn-reset-view" class="btn btn-outline btn-sm">🔍 Fit Bounds</button>
                     </div>
                 </div>
@@ -96,7 +99,7 @@
                 <div class="card planner-card">
                     <div class="card-header">
                         <h3>VRP Scenario Builder</h3>
-                        <span class="badge badge-info">1 Source + 2 Customers</span>
+                        <span id="vrp-scenario-badge" class="badge badge-info">1 Source + 2 Customers</span>
                     </div>
 
                     <div class="card-body">
@@ -105,17 +108,17 @@
                             <select id="origin-select" class="form-control"></select>
                         </div>
 
-                        <div class="form-group">
-                            <label for="dest1-select">Customer 1 (C1):</label>
-                            <select id="dest1-select" class="form-control"></select>
+                        <!-- Dynamic Customer Destination Dropdowns -->
+                        <div id="customer-selects-container">
+                            <!-- Populated dynamically via app.js -->
                         </div>
 
-                        <div class="form-group">
-                            <label for="dest2-select">Customer 2 (C2):</label>
-                            <select id="dest2-select" class="form-control"></select>
+                        <div class="customer-actions" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                            <button id="btn-add-customer" class="btn btn-outline btn-sm" style="flex: 1;" type="button">➕ Add Customer</button>
+                            <button id="btn-remove-customer" class="btn btn-outline btn-sm" style="flex: 1;" type="button">➖ Remove Customer</button>
                         </div>
 
-                        <p class="planner-help">Select depot and 2 customer locations on Pune map. Algorithms evaluate optimal visit order (O → C1 → C2 vs O → C2 → C1) under live SUMO traffic.</p>
+                        <p class="planner-help">Select depot and customer locations on Pune map. Algorithms evaluate optimal visit order (e.g. O → C1 → C2 → C3) under live SUMO traffic.</p>
                         <button id="btn-calc-route" class="btn btn-primary btn-block">Run Dijkstra VRP</button>
                         <button id="btn-qaoa-route" class="btn btn-qaoa btn-block">Run QAOA VRP</button>
                         <button id="btn-qpso-route" class="btn btn-secondary btn-block">Run QPSO VRP</button>
@@ -126,6 +129,10 @@
                             <div class="metric-row">
                                 <span class="m-label">VRP Algorithm:</span>
                                 <span id="r-status" class="m-val highlight-green">Optimal</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="m-label">Snapshot Timestamp:</span>
+                                <span id="r-timestamp" class="m-val highlight-cyan">t = 0.0 s</span>
                             </div>
                             <div class="metric-row">
                                 <span class="m-label">Visit Sequence:</span>
@@ -211,11 +218,12 @@
         </main>
     </div>
 
+    <!-- 3-Way Comparison & Proofs Workspace Modal -->
     <section id="analysis-workspace" class="analysis-workspace hidden" role="dialog" aria-modal="true" aria-labelledby="analysis-title">
         <div class="analysis-dialog">
             <header class="analysis-header">
                 <div>
-                    <span class="analysis-eyebrow">3-ALGORITHM SIDE-BY-SIDE COMPARISON</span>
+                    <span class="analysis-eyebrow">3-ALGORITHM SIDE-BY-SIDE VRP BENCHMARK</span>
                     <h2 id="analysis-title">Dijkstra vs QAOA vs QPSO</h2>
                     <p id="analysis-route-label" class="analysis-route-label">Current traffic snapshot</p>
                 </div>
@@ -233,6 +241,11 @@
             <div class="analysis-content">
                 <!-- TAB 1: 3-Way Comparison Overview -->
                 <section class="analysis-panel active" data-analysis-panel="overview">
+                    <div id="snapshot-badge-card" class="snapshot-badge-card" style="margin-bottom: 14px; background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between;">
+                        <span>🔒 <strong>Snapshot Synchronized:</strong> All algorithms evaluated on identical SUMO graph state at <span id="snapshot-time-val" style="color: var(--accent-cyan); font-family: var(--font-mono); font-weight: 700;">t = 0.0s</span></span>
+                        <span id="perms-count-badge" class="badge badge-info">2 Candidate Permutations (N=2)</span>
+                    </div>
+
                     <p id="a-basis" class="analysis-basis"></p>
 
                     <div class="comparison-table-wrap">
@@ -247,7 +260,14 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr><th>Dynamic cost</th><td id="a-d-cost">-</td><td id="a-q-cost">-</td><td id="a-qpso-cost">-</td><td>Primary route objective</td></tr>
+                                <tr>
+                                    <th>Customer Visit Sequence</th>
+                                    <td id="a-d-seq">O → C1 → C2</td>
+                                    <td id="a-q-seq">O → C1 → C2</td>
+                                    <td id="a-qpso-seq">O → C1 → C2</td>
+                                    <td>Evaluated Customer Order</td>
+                                </tr>
+                                <tr><th>Dynamic cost f(R)</th><td id="a-d-cost">-</td><td id="a-q-cost">-</td><td id="a-qpso-cost">-</td><td>Primary route objective</td></tr>
                                 <tr><th>Travel time (s)</th><td id="a-d-time">-</td><td id="a-q-time">-</td><td id="a-qpso-time">-</td><td>Estimated time on live traffic</td></tr>
                                 <tr><th>Distance (m)</th><td id="a-d-dist">-</td><td id="a-q-dist">-</td><td id="a-qpso-dist">-</td><td>Physical route length</td></tr>
                                 <tr><th>Average speed (m/s)</th><td id="a-d-speed">-</td><td id="a-q-speed">-</td><td id="a-qpso-speed">-</td><td>Traffic flow velocity</td></tr>
@@ -257,23 +277,73 @@
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Explanatory Info Cards for Metric Alignment and Snapshot Synchronization -->
+                    <div class="overview-info-cards" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px;">
+                        <div class="info-card" style="background: rgba(16, 185, 129, 0.07); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 10px; padding: 14px;">
+                            <h4 style="color: #a7f3d0; font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                                <span>ℹ️</span> <strong>Metric Alignment Explanation</strong>
+                            </h4>
+                            <p style="color: var(--text-secondary); font-size: 11px; line-height: 1.5;">
+                                When QPSO swarm search converges to the exact optimal sequence found by Dijkstra (e.g. <code>O → C1 → C2</code>), both algorithms traverse the identical physical road network on SUMO graph <strong>G(t)</strong>. Their travel time, distance, cost, speed, and congestion metrics evaluate to 100% identical values because the physical route choice is identical. Add more customers (C3, C4) in the builder panel to test larger permutation spaces (N! = 6, 24).
+                            </p>
+                        </div>
+
+                        <div class="info-card" style="background: rgba(59, 130, 246, 0.07); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px; padding: 14px;">
+                            <h4 style="color: #bfdbfe; font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                                <span>🔒</span> <strong>Single Run vs 3-Way Snapshot Synchronization</strong>
+                            </h4>
+                            <p style="color: var(--text-secondary); font-size: 11px; line-height: 1.5;">
+                                Running individual algorithms one-by-one evaluates the graph as live SUMO time advances between clicks (<span class="math-inline">t_1, t_2, t_3</span>). In this 3-way comparison modal, Dijkstra, QAOA, and QPSO are executed simultaneously on the <strong>exact same frozen SUMO snapshot at <span id="sync-info-time" style="color: var(--accent-cyan); font-family: var(--font-mono); font-weight: 700;">t = 0.0s</span></strong> to guarantee a mathematically fair benchmark.
+                            </p>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- TAB 2: Dijkstra Working & Proofs -->
                 <section class="analysis-panel" data-analysis-panel="dijkstra">
                     <div class="analysis-intro">
                         <h3>Dijkstra's Algorithm Internal Working & Mathematical Proof</h3>
-                        <p>Dijkstra computes exact full-network shortest paths on dynamic SUMO graph G(t) using priority-queue node relaxation.</p>
+                        <p>Dijkstra computes exact ground-truth customer visit sequence permutations and shortest physical paths on dynamic SUMO graph G(t) using priority-queue node relaxation.</p>
                     </div>
 
                     <div class="proof-card">
-                        <h4>1. Edge Weight & Path Metric Equations</h4>
-                        <div class="formula-box">
-                            <div><code>Edge Weight: w_e(t) = T_e(t) = \frac{L_e}{\max(v_e, 0.1)} \times (1 + \text{penalty}_e)</code></div>
-                            <div><code>Node Relaxation: d[v] = \min(d[v], d[u] + w(u, v)) \quad \forall v \in \text{Adj}(u)</code></div>
-                            <div><code>Total Travel Time: T_{\text{total}} = \sum_{e \in \text{Path}} T_e(t)</code></div>
-                            <div><code>Total Distance: D_{\text{total}} = \sum_{e \in \text{Path}} L_e</code></div>
-                            <div><code>Average Speed: v_{\text{avg}} = \frac{D_{\text{total}}}{\max(T_{\text{total}}, 0.1)}</code></div>
+                        <h4>1. Mathematical Optimization Principle & Step-by-Step Equations</h4>
+                        <div class="math-proof-steps" style="display: grid; gap: 12px; margin-bottom: 14px;">
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: var(--accent-cyan); font-size: 12px;">Step 1: Permutation Search Space Enumerable Set</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\Pi(N) = \text{Permutations}(C_1, C_2, \dots, C_N), \quad |\Pi(N)| = N!$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: var(--accent-cyan); font-size: 12px;">Step 2: Ground-Truth Optimal Sequence Objective Function</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\pi^* = \arg\min_{\pi \in \Pi(N)} \left[ \sum_{k=1}^N d_{\text{path}}\left(C_{\pi(k-1)}, C_{\pi(k)}\right) \right], \quad \text{where } C_{\pi(0)} = O \text{ (Depot)}$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: var(--accent-cyan); font-size: 12px;">Step 3: Leg Shortest Path via Priority-Queue Relaxation</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$d[v] = \min \left( d[v], d[u] + w_e(t) \right) \quad \forall v \in \text{Adj}(u)$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: var(--accent-cyan); font-size: 12px;">Step 4: Dynamic SUMO Edge Weight Formula \(w_e(t)\)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$w_e(t) = T_e(t) = \frac{L_e}{\max(v_e(t), 0.1)} \times \left( 1 + \text{penalty}_e \right)$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: var(--accent-cyan); font-size: 12px;">Step 5: Accumulated Physical Route Metrics</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$T_{\text{total}} = \sum_{e \in \text{Path}} T_e(t), \quad D_{\text{total}} = \sum_{e \in \text{Path}} L_e, \quad v_{\text{avg}} = \frac{D_{\text{total}}}{\max(T_{\text{total}}, 0.1)}$$
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -307,18 +377,53 @@
                 <section class="analysis-panel" data-analysis-panel="qaoa">
                     <div class="analysis-intro">
                         <h3>QAOA Link-Based VRP Solver Internal Working & Mathematical Proof</h3>
-                        <p>Formulated strictly according to <strong>Azfar et al. (ACM Trans. Quantum Comput., 2025 / arXiv:2505.01614)</strong>.</p>
+                        <p>Formulated strictly according to <strong>Azfar, Raisuddin, Ke, Holguín-Veras (ACM Trans. Quantum Comput., 2025 / arXiv:2505.01614)</strong>.</p>
                     </div>
 
                     <div class="proof-card">
-                        <h4>1. Research Paper Mathematical Pipeline & Equations</h4>
-                        <div class="formula-box">
-                            <div><code>Constrained LP Objective: \min \sum_{i,j} w_{i,j}(t) x_{i,j} \quad \text{s.t.} \quad \sum_{j} x_{i,j} = 1 \; (i>0), \;\; \sum_{j} x_{0,j} = k</code></div>
-                            <div><code>Sec 4.5 Penalty Multiplier: P = 2 \times \sum_{i,j} |w_{i,j}(t)|</code></div>
-                            <div><code>QUBO Matrix Normalization: Q_{\text{norm}} = \frac{Q}{\max_{i,j} |Q_{i,j}|}</code></div>
-                            <div><code>Ising Transformation (x_i \to \frac{Z_i + I}{2}): H_C = c_0 + \sum_i h_i Z_i + \sum_{i<j} J_{i,j} Z_i Z_j</code></div>
-                            <div><code>QAOA Circuit Ansatz: |\psi(\mathbf{\gamma}, \mathbf{\beta})\rangle = \prod_{l=1}^p e^{-i \beta_l H_M} e^{-i \gamma_l H_C} |+\rangle^{\otimes n}, \quad H_M = \sum_i X_i</code></div>
-                            <div><code>Variational Optimization: \min_{\mathbf{\gamma}, \mathbf{\beta}} \langle \psi(\mathbf{\gamma}, \mathbf{\beta}) | H_C | \psi(\mathbf{\gamma}, \mathbf{\beta}) \rangle \quad \text{via COBYLA}</code></div>
+                        <h4>1. Research Paper Mathematical Pipeline & Step-by-Step Formulations</h4>
+                        <div class="math-proof-steps" style="display: grid; gap: 12px; margin-bottom: 14px;">
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #c084fc; font-size: 12px;">Step 1: Decision Variable Formulation & Qubit Mapping</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$x_{i,p} \in \{0, 1\} \quad (\text{Customer } i \text{ visited at position } p), \quad n_{\text{qubits}} = N^2$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #c084fc; font-size: 12px;">Step 2: Position-Based QUBO Objective & Uniqueness Penalties</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$H_{\text{QUBO}} = \sum_{i=1}^N c_{0, i} x_{i, 1} + \sum_{p=1}^{N-1} \sum_{i=1}^N \sum_{j \ne i}^N c_{i, j} x_{i, p} x_{j, p+1} + P \sum_{i=1}^N \left( \sum_{p=1}^N x_{i,p} - 1 \right)^2 + P \sum_{p=1}^N \left( \sum_{i=1}^N x_{i,p} - 1 \right)^2$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #c084fc; font-size: 12px;">Step 3: Penalty Multiplier Scaling (Azfar et al. Sec 4.5)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$P = 2 \times \sum_{i,j} |c_{i,j}|, \quad Q_{\text{norm}} = \frac{Q}{\max_{i,j} |Q_{i,j}|}$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #c084fc; font-size: 12px;">Step 4: Ising Spin Transformation & Cost Hamiltonian</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$x_k \to \frac{Z_k + I}{2} \implies H_C = c_0 I + \sum_{k=1}^n h_k Z_k + \sum_{1 \le i < j \le n} J_{i,j} Z_i Z_j$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #c084fc; font-size: 12px;">Step 5: QAOA Variational Quantum Ansatz & X-Mixer Operator</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$|\psi(\boldsymbol{\gamma}, \boldsymbol{\beta})\rangle = \prod_{l=1}^p e^{-i \beta_l H_M} e^{-i \gamma_l H_C} |+\rangle^{\otimes n}, \quad H_M = \sum_{k=1}^n X_k$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #c084fc; font-size: 12px;">Step 6: Classical Optimization (COBYLA)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\min_{\boldsymbol{\gamma}, \boldsymbol{\beta}} E(\boldsymbol{\gamma}, \boldsymbol{\beta}) = \langle \psi(\boldsymbol{\gamma}, \boldsymbol{\beta}) | H_C | \psi(\boldsymbol{\gamma}, \boldsymbol{\beta}) \rangle$$
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -330,15 +435,15 @@
                     </div>
 
                     <div class="proof-card">
-                        <h4>2. Link Decision Variable to Qubit Mapping</h4>
+                        <h4>2. Position Decision Variable to Qubit Mapping Table</h4>
                         <div class="table-wrap">
                             <table class="proof-table">
                                 <thead>
                                     <tr>
                                         <th>Qubit Index</th>
-                                        <th>Link (i, j)</th>
-                                        <th>SUMO Road Edge</th>
-                                        <th>Dynamic Weight w_ij</th>
+                                        <th>Decision Variable</th>
+                                        <th>Assigned Step</th>
+                                        <th>Customer Target</th>
                                         <th>Ising Term</th>
                                     </tr>
                                 </thead>
@@ -389,13 +494,49 @@
                     </div>
 
                     <div class="proof-card">
-                        <h4>1. Research Paper Mathematical Pipeline & Equations</h4>
-                        <div class="formula-box">
-                            <div><code>Quantum Wave Collapse Update: x_{i,d}(t+1) = p_{i,d} \pm \alpha(t) \cdot |mbest_d - x_{i,d}(t)| \cdot \ln(1/u), \quad u \sim U(0, 1)</code></div>
-                            <div><code>Learning Inclination Point (LIP): p_{i,d} = \frac{\phi_1 pbest_{i,d} + \phi_2 gbest_d}{\phi_1 + \phi_2}, \quad \phi_1, \phi_2 \sim U(0, 1)</code></div>
-                            <div><code>Mean Best Position Vector (Eq. 11): mbest_d = \frac{1}{M} \sum_{i=1}^M pbest_{i,d}</code></div>
-                            <div><code>Linear Contraction-Expansion Decay: \alpha(t) = \alpha_{\text{start}} - \frac{t}{T_{\max}-1} (\alpha_{\text{start}} - \alpha_{\text{end}}), \quad (1.0 \to 0.5)</code></div>
-                            <div><code>Rank Discretization Rule (Sec 3.3): \text{Sort intermediate continuous particle values } x_{i,d} \text{ ascending to obtain node tour } \pi</code></div>
+                        <h4>1. Research Paper Mathematical Pipeline & Step-by-Step Formulations</h4>
+                        <div class="math-proof-steps" style="display: grid; gap: 12px; margin-bottom: 14px;">
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #38bdf8; font-size: 12px;">Step 1: Continuous Swarm Representation & Search Dimension</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\mathbf{x}_i = (x_{i,1}, x_{i,2}, \dots, x_{i,D}) \in \mathbb{R}^D, \quad D = N \text{ (Number of Customers)}$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #38bdf8; font-size: 12px;">Step 2: Mean Best Position Vector (Herrera et al. Eq. 11)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\mathbf{mbest}_d = \frac{1}{M} \sum_{i=1}^M pbest_{i,d} \quad \forall d \in \{1, \dots, D\}$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #38bdf8; font-size: 12px;">Step 3: Learning Inclination Point (LIP) \(p_{i,d}\)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$p_{i,d} = \frac{\phi_1 \cdot pbest_{i,d} + \phi_2 \cdot gbest_d}{\phi_1 + \phi_2}, \quad \phi_1, \phi_2 \sim \text{Uniform}(0, 1)$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #38bdf8; font-size: 12px;">Step 4: Quantum Wave Collapse Position Update (Eq. 13 & Algorithm 1)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$x_{i,d}(t+1) = p_{i,d} \pm \alpha(t) \cdot |\mathbf{mbest}_d - x_{i,d}(t)| \cdot \ln\left(\frac{1}{u}\right), \quad u \sim \text{Uniform}(0, 1)$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #38bdf8; font-size: 12px;">Step 5: Linear Contraction-Expansion Decay \(\alpha(t)\)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\alpha(t) = \alpha_{\text{start}} - \frac{t}{T_{\max} - 1} (\alpha_{\text{start}} - \alpha_{\text{end}}), \quad \alpha(0) = 1.0 \to \alpha(T_{\max}) = 0.5$$
+                                </div>
+                            </div>
+
+                            <div class="math-step-card" style="background: #090d16; border: 1px solid #273044; border-radius: 8px; padding: 12px 16px;">
+                                <strong style="color: #38bdf8; font-size: 12px;">Step 6: Rank Discretization Mapping (Sec 3.3, pp. 14-15)</strong>
+                                <div class="math-display" style="margin-top: 6px; font-size: 13px; color: #f3f4f6;">
+                                    $$\pi = \text{Argsort}(\mathbf{x}_i) \implies \text{Visit Sequence } = [O, C_{\pi(1)}, C_{\pi(2)}, \dots, C_{\pi(D)}]$$
+                                </div>
+                            </div>
                         </div>
                     </div>
 

@@ -18,10 +18,10 @@ class TrafficApp {
         this.dragStartY = 0;
 
         // Interaction state
-        this.pickMode = null; // 'origin' | 'c1' | 'c2' | null
+        this.pickMode = null; // 'origin' | 'c1' | 'c2' | 'c3' | ... | null
         this.selectedOrigin = null;
-        this.selectedDest1 = null;
-        this.selectedDest2 = null;
+        this.customerCount = 2; // Default 2 customer destinations (supports 1..5)
+        this.selectedCustomers = [];
         this.hoveredItem = null;
 
         // Live simulation state
@@ -54,12 +54,17 @@ class TrafficApp {
         document.getElementById('btn-step').addEventListener('click', () => this.sendSimCmd('step'));
         document.getElementById('btn-stop').addEventListener('click', () => this.sendSimCmd('stop'));
 
-        // Pick buttons
-        document.getElementById('btn-pick-origin').addEventListener('click', (e) => this.togglePickMode('origin', e.target));
-        const btnC1 = document.getElementById('btn-pick-c1');
-        if (btnC1) btnC1.addEventListener('click', (e) => this.togglePickMode('c1', e.target));
-        const btnC2 = document.getElementById('btn-pick-c2');
-        if (btnC2) btnC2.addEventListener('click', (e) => this.togglePickMode('c2', e.target));
+        // Customer controls
+        this.renderCustomerControls();
+        const btnAdd = document.getElementById('btn-add-customer');
+        if (btnAdd) btnAdd.addEventListener('click', () => this.addCustomer());
+        const btnRemove = document.getElementById('btn-remove-customer');
+        if (btnRemove) btnRemove.addEventListener('click', () => this.removeCustomer());
+
+        // Pick buttons in toolbar
+        document.getElementById('btn-pick-origin').addEventListener('click', (e) => this.togglePickMode('origin', e.currentTarget));
+        const btnPickCust = document.getElementById('btn-pick-customer');
+        if (btnPickCust) btnPickCust.addEventListener('click', (e) => this.togglePickMode('c1', e.currentTarget));
         document.getElementById('btn-reset-view').addEventListener('click', () => this.fitBounds());
 
         // Route calc
@@ -87,6 +92,58 @@ class TrafficApp {
         this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
     }
 
+    renderCustomerControls() {
+        const container = document.getElementById('customer-selects-container');
+        if (!container) return;
+        container.innerHTML = '';
+
+        for (let i = 1; i <= this.customerCount; i++) {
+            const div = document.createElement('div');
+            div.className = 'form-group customer-group';
+            div.setAttribute('data-dest-index', i);
+            div.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <label for="dest${i}-select" style="margin: 0;">Customer ${i} (C${i}):</label>
+                    <button type="button" class="btn btn-outline btn-sm btn-pick-cust" data-cust-index="${i}" style="padding: 1px 6px; font-size: 10px;">📍 Pick C${i}</button>
+                </div>
+                <select id="dest${i}-select" class="form-control customer-select"></select>
+            `;
+            container.appendChild(div);
+        }
+
+        // Attach click handlers to customer pick buttons
+        container.querySelectorAll('.btn-pick-cust').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.currentTarget.dataset.custIndex, 10);
+                this.togglePickMode(`c${idx}`, e.currentTarget);
+            });
+        });
+
+        // Update VRP badge
+        const badge = document.getElementById('vrp-scenario-badge');
+        if (badge) {
+            badge.innerText = `1 Source + ${this.customerCount} Customers`;
+        }
+    }
+
+    addCustomer() {
+        if (this.customerCount < 5) {
+            this.customerCount++;
+            this.renderCustomerControls();
+            this.populateSelects();
+            this.requestRender();
+        }
+    }
+
+    removeCustomer() {
+        if (this.customerCount > 1) {
+            this.customerCount--;
+            this.renderCustomerControls();
+            this.populateSelects();
+            this.requestRender();
+        }
+    }
+
     resizeCanvas() {
         const viewport = this.canvas.parentElement;
         this.canvas.width = viewport.clientWidth;
@@ -109,36 +166,58 @@ class TrafficApp {
         if (!this.networkData) return;
 
         const originSelect = document.getElementById('origin-select');
-        const dest1Select = document.getElementById('dest1-select');
-        const dest2Select = document.getElementById('dest2-select');
         const edgeSelect = document.getElementById('incident-edge-select');
 
-        originSelect.innerHTML = '';
-        if (dest1Select) dest1Select.innerHTML = '';
-        if (dest2Select) dest2Select.innerHTML = '';
-        edgeSelect.innerHTML = '';
+        if (originSelect) originSelect.innerHTML = '';
+        if (edgeSelect) edgeSelect.innerHTML = '';
 
         const nodeKeys = Object.keys(this.networkData.nodes);
-        nodeKeys.sort().forEach((nid, i) => {
-            originSelect.add(new Option(`Junction ${nid}`, nid));
-            if (dest1Select) dest1Select.add(new Option(`Junction ${nid}`, nid));
-            if (dest2Select) dest2Select.add(new Option(`Junction ${nid}`, nid));
+        nodeKeys.sort();
+
+        nodeKeys.forEach((nid) => {
+            if (originSelect) originSelect.add(new Option(`Junction ${nid}`, nid));
         });
 
-        // Set default origin, C1, and C2 if available
-        if (nodeKeys.length >= 3) {
-            originSelect.selectedIndex = 0;
-            if (dest1Select) dest1Select.selectedIndex = Math.min(5, nodeKeys.length - 1);
-            if (dest2Select) dest2Select.selectedIndex = Math.min(12, nodeKeys.length - 1);
-            this.selectedOrigin = originSelect.value;
-            this.selectedDest1 = dest1Select ? dest1Select.value : null;
-            this.selectedDest2 = dest2Select ? dest2Select.value : null;
+        const defaultCustomerIndices = [5, 12, 18, 25, 30];
+
+        for (let i = 1; i <= this.customerCount; i++) {
+            const destSelect = document.getElementById(`dest${i}-select`);
+            if (!destSelect) continue;
+            const currentVal = destSelect.value;
+            destSelect.innerHTML = '';
+            nodeKeys.forEach((nid) => {
+                destSelect.add(new Option(`Junction ${nid}`, nid));
+            });
+
+            if (currentVal && nodeKeys.includes(currentVal)) {
+                destSelect.value = currentVal;
+            } else if (nodeKeys.length > 0) {
+                const defIdx = defaultCustomerIndices[i - 1] || Math.min(i * 5, nodeKeys.length - 1);
+                destSelect.selectedIndex = Math.min(defIdx, nodeKeys.length - 1);
+            }
         }
 
-        this.networkData.edges.forEach(edge => {
-            const opt = new Option(`Road ${edge.id} (${Math.round(edge.length)}m)`, edge.id);
-            edgeSelect.add(opt);
-        });
+        if (nodeKeys.length > 0 && originSelect && !this.selectedOrigin) {
+            originSelect.selectedIndex = 0;
+            this.selectedOrigin = originSelect.value;
+        }
+
+        if (this.networkData.edges && edgeSelect) {
+            this.networkData.edges.forEach(edge => {
+                const opt = new Option(`Road ${edge.id} (${Math.round(edge.length)}m)`, edge.id);
+                edgeSelect.add(opt);
+            });
+        }
+
+        this.updateSelectedCustomers();
+    }
+
+    updateSelectedCustomers() {
+        this.selectedCustomers = [];
+        for (let i = 1; i <= this.customerCount; i++) {
+            const el = document.getElementById(`dest${i}-select`);
+            this.selectedCustomers.push(el ? el.value : null);
+        }
     }
 
     fitBounds() {
@@ -157,7 +236,6 @@ class TrafficApp {
     }
 
     worldToScreen(x, y) {
-        // SUMO Y grows upward; canvas Y grows downward
         const screenX = x * this.zoom + this.panX;
         const screenY = this.panY - y * this.zoom;
         return { x: screenX, y: screenY };
@@ -292,7 +370,10 @@ class TrafficApp {
         this.activeIncidents = msg.active_incidents || [];
         if (msg.active_route) {
             this.activeRoute = msg.active_route;
-            if (!this.analysisVisible) this.updateRouteResultsUI(msg.active_route);
+            this.updateRouteResultsUI(msg.active_route);
+            if (this.analysisVisible && (msg.active_route.analysis || msg.active_route.dijkstra)) {
+                this.renderAnalysisWorkspace(msg.active_route);
+            }
         }
 
         // Live stats UI
@@ -320,31 +401,30 @@ class TrafficApp {
     togglePickMode(mode, btn) {
         if (this.pickMode === mode) {
             this.pickMode = null;
-            btn.classList.remove('active');
+            if (btn) btn.classList.remove('active');
         } else {
-            document.querySelectorAll('.tool-group .btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
             this.pickMode = mode;
-            btn.classList.add('active');
+            if (btn) btn.classList.add('active');
         }
     }
 
     getVRPRequest() {
-        const origin = document.getElementById('origin-select').value;
-        const dest1El = document.getElementById('dest1-select');
-        const dest2El = document.getElementById('dest2-select');
-
-        const dest1 = dest1El ? dest1El.value : null;
-        const dest2 = dest2El ? dest2El.value : null;
-
+        const origin = document.getElementById('origin-select')?.value;
         const destinations = [];
-        if (dest1) destinations.push(dest1);
-        if (dest2 && dest2 !== dest1) destinations.push(dest2);
+
+        for (let i = 1; i <= this.customerCount; i++) {
+            const el = document.getElementById(`dest${i}-select`);
+            const val = el ? el.value : null;
+            if (val && !destinations.includes(val)) {
+                destinations.push(val);
+            }
+        }
 
         if (!origin || destinations.length === 0) return null;
 
         this.selectedOrigin = origin;
-        this.selectedDest1 = dest1;
-        this.selectedDest2 = dest2;
+        this.selectedCustomers = destinations;
 
         return {
             origin_node: origin,
@@ -382,6 +462,7 @@ class TrafficApp {
             if (data.success) {
                 this.qaoaResult = data;
                 this.activeRoute = data;
+                this.clearAnalysisWorkspace();
                 this.updateRouteResultsUI(data);
                 this.requestRender();
             } else {
@@ -400,6 +481,7 @@ class TrafficApp {
             if (data.success) {
                 this.qpsoResult = data;
                 this.activeRoute = data;
+                this.clearAnalysisWorkspace();
                 this.updateRouteResultsUI(data);
                 this.requestRender();
             } else {
@@ -458,11 +540,15 @@ class TrafficApp {
     updateRouteResultsUI(res) {
         if (!res || !res.success) return;
         const el = document.getElementById('route-results');
-        el.classList.remove('hidden');
+        if (!this.analysisVisible) el.classList.remove('hidden');
 
         const visitSeqStr = Array.isArray(res.visit_sequence) ? res.visit_sequence.join(' → ') : 'O → C1 → C2';
+        const snapTime = res.snapshot_timestamp !== undefined ? res.snapshot_timestamp : (res.problem?.timestamp !== undefined ? res.problem.timestamp : this.simTime);
 
         document.getElementById('r-status').innerText = res.algorithm;
+        const snapEl = document.getElementById('r-timestamp');
+        if (snapEl) snapEl.innerText = `t = ${snapTime.toFixed(1)} s`;
+
         const rSeq = document.getElementById('r-sequence');
         if (rSeq) rSeq.innerText = visitSeqStr;
         document.getElementById('r-tt').innerText = `${res.total_travel_time} s`;
@@ -475,6 +561,7 @@ class TrafficApp {
     renderAnalysisWorkspace(data) {
         this.analysisData = data;
         const analysis = data.analysis || {};
+        const outcome = analysis.outcome || {};
         const dijkstra = analysis.algorithms?.dijkstra || data.dijkstra || {};
         const qaoa = analysis.algorithms?.qaoa || data.qaoa || {};
         const qpso = analysis.algorithms?.qpso || data.qpso || {};
@@ -482,9 +569,38 @@ class TrafficApp {
         const qaoaRaw = data.qaoa || {};
         const qpsoRaw = data.qpso || {};
 
-        const seqStr = dijkstraRaw.visit_sequence ? dijkstraRaw.visit_sequence.join(' → ') : (dijkstraRaw.origin_node ? `${dijkstraRaw.origin_node} → ${dijkstraRaw.destination_node}` : 'VRP 2-Customer Scenario');
-        this.setText('analysis-route-label', `${seqStr} • live SUMO traffic snapshot`);
+        const snapTime = data.snapshot_timestamp !== undefined ? data.snapshot_timestamp : (data.problem?.timestamp !== undefined ? data.problem.timestamp : this.simTime);
+        this.setText('snapshot-time-val', `t = ${snapTime.toFixed(1)}s`);
+        this.setText('sync-info-time', `t = ${snapTime.toFixed(1)}s`);
+
+        const numCustomers = outcome.num_customers || data.problem?.destinations?.length || this.customerCount;
+        const permsCount = outcome.permutation_count || (numCustomers === 2 ? 2 : (numCustomers === 3 ? 6 : (numCustomers === 4 ? 24 : 120)));
+        this.setText('perms-count-badge', `${permsCount} Candidate Permutations (N=${numCustomers})`);
+
+        const seqStr = dijkstraRaw.visit_sequence ? dijkstraRaw.visit_sequence.join(' → ') : (dijkstraRaw.origin_node ? `${dijkstraRaw.origin_node} → ${dijkstraRaw.destination_node}` : `VRP ${numCustomers}-Customer Scenario`);
+        this.setText('analysis-route-label', `${seqStr} • Captured at t = ${snapTime.toFixed(1)}s`);
         this.setText('a-basis', analysis.comparison_basis || '');
+
+        // Sequence row with baseline matching status badges
+        const dSeq = dijkstraRaw.visit_sequence ? dijkstraRaw.visit_sequence.join(' → ') : '—';
+        const qSeq = qaoaRaw.visit_sequence ? qaoaRaw.visit_sequence.join(' → ') : '—';
+        const qpsoSeq = qpsoRaw.visit_sequence ? qpsoRaw.visit_sequence.join(' → ') : '—';
+
+        const qMatched = outcome.qaoa_matched_baseline !== undefined ? outcome.qaoa_matched_baseline : (qSeq === dSeq && qaoaRaw.success);
+        const qpsoMatched = outcome.qpso_matched_baseline !== undefined ? outcome.qpso_matched_baseline : (qpsoSeq === dSeq && qpsoRaw.success);
+
+        const dSeqEl = document.getElementById('a-d-seq');
+        if (dSeqEl) dSeqEl.innerHTML = `<strong>${dSeq}</strong> <span class="badge badge-info" style="font-size: 9px; margin-left: 4px;">Ground-Truth Baseline</span>`;
+
+        const qSeqEl = document.getElementById('a-q-seq');
+        if (qSeqEl) {
+            qSeqEl.innerHTML = `<strong>${qSeq}</strong> ${qMatched ? '<span class="badge badge-success" style="font-size: 9px; margin-left: 4px;">✓ Matched Baseline</span>' : '<span class="badge badge-warning" style="font-size: 9px; margin-left: 4px;">Sub-optimal</span>'}`;
+        }
+
+        const qpsoSeqEl = document.getElementById('a-qpso-seq');
+        if (qpsoSeqEl) {
+            qpsoSeqEl.innerHTML = `<strong>${qpsoSeq}</strong> ${qpsoMatched ? '<span class="badge badge-success" style="font-size: 9px; margin-left: 4px;">✓ Matched Baseline</span>' : '<span class="badge badge-warning" style="font-size: 9px; margin-left: 4px;">Sub-optimal</span>'}`;
+        }
 
         // Tab 1: Overview comparison table
         this.fillOverviewColumn('d', dijkstra);
@@ -513,7 +629,7 @@ class TrafficApp {
         const qpsoDetails = qpsoRaw.solver_details || qpsoRaw;
         this.setText('qpso-particles-val', qpsoDetails.particles_M || qpsoRaw.qpso_particles || 40);
         this.setText('qpso-iterations-val', qpsoDetails.iterations_T || qpsoRaw.qpso_iterations || 50);
-        this.setText('qpso-dim-val', qpsoDetails.dimensions_D || qpsoRaw.candidate_subgraph_nodes || '-');
+        this.setText('qpso-dim-val', qpsoDetails.dimensions_D || numCustomers);
         this.setText('qpso-alpha-val', qpsoDetails.final_alpha || qpsoRaw.final_alpha || '-');
         this.renderQpsoRankTable(qpsoDetails);
         this.renderSegmentCalculationsTable('qpso-segments-body', qpsoRaw.segment_calculations || []);
@@ -522,6 +638,26 @@ class TrafficApp {
         this.renderRouteEvidence('d', dijkstraRaw);
         this.renderRouteEvidence('q', qaoaRaw);
         this.renderRouteEvidence('qpso', qpsoRaw);
+
+        // Trigger KaTeX math rendering
+        this.renderKaTeX();
+    }
+
+    renderKaTeX() {
+        if (window.renderMathInElement) {
+            try {
+                window.renderMathInElement(document.getElementById('analysis-workspace'), {
+                    delimiters: [
+                        { left: '$$', right: '$$', display: true },
+                        { left: '\\(', right: '\\)', display: false },
+                        { left: '$', right: '$', display: false }
+                    ],
+                    throwOnError: false
+                });
+            } catch (e) {
+                console.warn("KaTeX rendering error:", e);
+            }
+        }
     }
 
     renderSegmentCalculationsTable(tableBodyId, segments) {
@@ -652,27 +788,6 @@ class TrafficApp {
         this.setText(`a-${prefix}-compute`, `${this.formatValue(computeMs, 2)} ms`);
     }
 
-    renderCandidateCosts(qaoa) {
-        const target = document.getElementById('q-candidate-costs');
-        if (!target) return;
-        target.replaceChildren();
-        const costs = Array.isArray(qaoa.candidate_costs) ? qaoa.candidate_costs : [];
-        if (!costs.length) {
-            target.textContent = 'No candidate-route data.';
-            return;
-        }
-        costs.forEach((cost, index) => {
-            const row = document.createElement('div');
-            row.className = `candidate-row ${index === qaoa.selected_candidate_index ? 'selected' : ''}`;
-            const label = document.createElement('span');
-            label.textContent = `Candidate ${index + 1}${index === qaoa.selected_candidate_index ? ' • selected' : ''}`;
-            const value = document.createElement('strong');
-            value.textContent = this.formatValue(cost, 2);
-            row.append(label, value);
-            target.append(row);
-        });
-    }
-
     renderSampleCounts(counts) {
         const target = document.getElementById('q-samples');
         if (!target) return;
@@ -734,18 +849,24 @@ class TrafficApp {
         document.querySelectorAll('.analysis-panel').forEach(panel => {
             panel.classList.toggle('active', panel.dataset.analysisPanel === tabName);
         });
+        this.renderKaTeX();
     }
 
     openAnalysisWorkspace() {
         if (!this.analysisData) return;
+        this.analysisVisible = true;
         document.getElementById('analysis-workspace').classList.remove('hidden');
         document.body.classList.add('analysis-open');
         this.activateAnalysisTab('overview');
     }
 
     closeAnalysisWorkspace() {
+        this.analysisVisible = false;
         document.getElementById('analysis-workspace').classList.add('hidden');
         document.body.classList.remove('analysis-open');
+        if (this.activeRoute) {
+            document.getElementById('route-results').classList.remove('hidden');
+        }
     }
 
     clearAnalysisWorkspace() {
@@ -778,8 +899,10 @@ class TrafficApp {
         .then(data => {
             if (data.updated_route) {
                 this.activeRoute = data.updated_route;
-                this.clearAnalysisWorkspace();
                 this.updateRouteResultsUI(data.updated_route);
+                if (this.analysisVisible && (data.updated_route.analysis || data.updated_route.dijkstra)) {
+                    this.renderAnalysisWorkspace(data.updated_route);
+                }
             }
         });
     }
@@ -797,8 +920,10 @@ class TrafficApp {
         .then(data => {
             if (data.updated_route) {
                 this.activeRoute = data.updated_route;
-                this.clearAnalysisWorkspace();
                 this.updateRouteResultsUI(data.updated_route);
+                if (this.analysisVisible && (data.updated_route.analysis || data.updated_route.dijkstra)) {
+                    this.renderAnalysisWorkspace(data.updated_route);
+                }
             }
         });
     }
@@ -845,7 +970,6 @@ class TrafficApp {
             this.panY = sy - this.dragStartY;
             this.requestRender();
         } else {
-            // Hover check
             this.checkHover(sx, sy);
         }
     }
@@ -894,17 +1018,16 @@ class TrafficApp {
                 this.selectedOrigin = closestNode;
                 const el = document.getElementById('origin-select');
                 if (el) el.value = closestNode;
-            } else if (this.pickMode === 'c1') {
-                this.selectedDest1 = closestNode;
-                const el = document.getElementById('dest1-select');
+            } else if (this.pickMode && this.pickMode.startsWith('c')) {
+                const cIdx = parseInt(this.pickMode.substring(1), 10);
+                const el = document.getElementById(`dest${cIdx}-select`);
                 if (el) el.value = closestNode;
-            } else if (this.pickMode === 'c2') {
-                this.selectedDest2 = closestNode;
-                const el = document.getElementById('dest2-select');
-                if (el) el.value = closestNode;
+                if (this.selectedCustomers.length >= cIdx) {
+                    this.selectedCustomers[cIdx - 1] = closestNode;
+                }
             }
             this.pickMode = null;
-            document.querySelectorAll('.tool-group .btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
             this.calculateRoute();
         }
     }
@@ -1003,7 +1126,7 @@ class TrafficApp {
             ctx.fill();
         });
 
-        // 4. Draw Origin (O), Customer 1 (C1), and Customer 2 (C2) Markers
+        // 4. Draw Origin (O) and Customer Markers (C1, C2, C3...)
         if (this.selectedOrigin && this.networkData.nodes[this.selectedOrigin]) {
             const pos = this.networkData.nodes[this.selectedOrigin];
             const pt = this.worldToScreen(pos.x, pos.y);
@@ -1020,38 +1143,28 @@ class TrafficApp {
             ctx.fillText('O', pt.x, pt.y + 4);
         }
 
-        const c1Node = this.selectedDest1 || document.getElementById('dest1-select')?.value;
-        if (c1Node && this.networkData.nodes[c1Node]) {
-            const pos = this.networkData.nodes[c1Node];
-            const pt = this.worldToScreen(pos.x, pos.y);
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, 10, 0, 2 * Math.PI);
-            ctx.fillStyle = '#10B981'; // Green
-            ctx.fill();
-            ctx.strokeStyle = '#FFFFFF';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 10px Inter';
-            ctx.textAlign = 'center';
-            ctx.fillText('C1', pt.x, pt.y + 4);
-        }
+        const custColors = ['#10B981', '#EC4899', '#F59E0B', '#8B5CF6', '#06B6D4'];
 
-        const c2Node = this.selectedDest2 || document.getElementById('dest2-select')?.value;
-        if (c2Node && this.networkData.nodes[c2Node]) {
-            const pos = this.networkData.nodes[c2Node];
-            const pt = this.worldToScreen(pos.x, pos.y);
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, 10, 0, 2 * Math.PI);
-            ctx.fillStyle = '#EC4899'; // Pink/Purple
-            ctx.fill();
-            ctx.strokeStyle = '#FFFFFF';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 10px Inter';
-            ctx.textAlign = 'center';
-            ctx.fillText('C2', pt.x, pt.y + 4);
+        for (let i = 1; i <= this.customerCount; i++) {
+            const el = document.getElementById(`dest${i}-select`);
+            const cNode = el ? el.value : (this.selectedCustomers[i - 1]);
+            if (cNode && this.networkData.nodes[cNode]) {
+                const pos = this.networkData.nodes[cNode];
+                const pt = this.worldToScreen(pos.x, pos.y);
+                const color = custColors[(i - 1) % custColors.length];
+
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 10, 0, 2 * Math.PI);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = 'bold 10px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(`C${i}`, pt.x, pt.y + 4);
+            }
         }
     }
 }

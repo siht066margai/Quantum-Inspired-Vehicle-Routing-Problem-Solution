@@ -74,10 +74,142 @@ is_loop_running = False
 
 # Active route state tracked for recalculation on dynamic graph updates
 active_route_req: Optional[Dict[str, str]] = None
+active_vrp_req: Optional[Dict[str, Any]] = None
 latest_route_result: Optional[Dict[str, Any]] = None
 # Most-recent independent runs, indexed by origin/destination, for the analysis
 # endpoint. The UI starts fresh runs before requesting an analysis.
 route_algorithm_runs: Dict[tuple[str, str], Dict[str, Dict[str, Any]]] = {}
+
+
+def run_active_vrp_solver() -> Optional[Dict[str, Any]]:
+    global active_vrp_req, latest_route_result
+    if not active_vrp_req:
+        return None
+
+    algorithm = active_vrp_req.get("algorithm", "dijkstra")
+    origin = active_vrp_req.get("origin")
+    destinations = active_vrp_req.get("destinations", [])
+    if not origin or not destinations:
+        return None
+
+    vehicle_capacity = active_vrp_req.get("vehicle_capacity", 100.0)
+    alpha = active_vrp_req.get("alpha", 1.0)
+    beta = active_vrp_req.get("beta", 0.0)
+    gamma = active_vrp_req.get("gamma", 0.0)
+
+    prob = ProblemInstance(
+        origin=origin,
+        destinations=destinations,
+        graph=dt_graph,
+        vehicle_capacity=vehicle_capacity,
+        objective_weights={"alpha": alpha, "beta": beta, "gamma": gamma},
+        timestamp=sumo_mgr.get_snapshot().get("sim_time", 0.0)
+    )
+
+    if algorithm == "dijkstra":
+        res = dijkstra_vrp_solver.solve(prob)
+        res_dict = res.to_dict()
+        res_dict["snapshot_timestamp"] = prob.timestamp
+        latest_route_result = res_dict
+        return res_dict
+
+    elif algorithm == "qpso":
+        num_particles = active_vrp_req.get("num_particles", 40)
+        max_iter = active_vrp_req.get("max_iter", 50)
+        res = qpso_vrp_solver.solve(prob, num_particles=num_particles, max_iter=max_iter)
+        res_dict = res.to_dict()
+        res_dict["snapshot_timestamp"] = prob.timestamp
+        latest_route_result = res_dict
+        return res_dict
+
+    elif algorithm == "qaoa":
+        reps = active_vrp_req.get("reps", 1)
+        shots = active_vrp_req.get("shots", 1024)
+        res = qaoa_vrp_solver.solve(prob, reps=reps, shots=shots)
+        res_dict = res.to_dict()
+        res_dict["snapshot_timestamp"] = prob.timestamp
+        latest_route_result = res_dict
+        return res_dict
+
+    elif algorithm == "compare":
+        import itertools
+        dijkstra_res = dijkstra_vrp_solver.solve(prob)
+        num_particles = active_vrp_req.get("num_particles", 40)
+        max_iter = active_vrp_req.get("max_iter", 50)
+        qpso_res = qpso_vrp_solver.solve(prob, num_particles=num_particles, max_iter=max_iter)
+        reps = active_vrp_req.get("reps", 1)
+        shots = active_vrp_req.get("shots", 1024)
+        qaoa_res = qaoa_vrp_solver.solve(prob, reps=reps, shots=shots)
+
+        d_seq = dijkstra_res.visit_sequence
+        qpso_matched_baseline = bool(qpso_res.success and qpso_res.visit_sequence == d_seq)
+        qaoa_matched_baseline = bool(qaoa_res.success and qaoa_res.visit_sequence == d_seq)
+
+        qpso_dict = qpso_res.to_dict()
+        qaoa_dict = qaoa_res.to_dict()
+        dijkstra_dict = dijkstra_res.to_dict()
+
+        if qpso_res.success:
+            qpso_dict["solver_details"]["matched_dijkstra_optimum"] = qpso_matched_baseline
+        if qaoa_res.success:
+            qaoa_dict["solver_details"]["matched_dijkstra_optimum"] = qaoa_matched_baseline
+
+        num_customers = len(destinations)
+        candidate_perms_count = len(list(itertools.permutations(destinations)))
+
+        algos = {
+            "dijkstra": dijkstra_dict,
+            "qaoa": qaoa_dict,
+            "qpso": qpso_dict
+        }
+        valid_algos = {k: v for k, v in algos.items() if v.get("success")}
+
+        outcome = {}
+        if valid_algos:
+            lowest_cost = min(valid_algos.items(), key=lambda x: x[1]["total_cost"])[0]
+            lowest_time = min(valid_algos.items(), key=lambda x: x[1]["total_travel_time"])[0]
+            fastest_compute = min(valid_algos.items(), key=lambda x: x[1]["computation_time_ms"])[0]
+            outcome = {
+                "lowest_cost_algorithm": lowest_cost,
+                "lowest_travel_time_algorithm": lowest_time,
+                "fastest_computation_algorithm": fastest_compute,
+                "qpso_matched_baseline": qpso_matched_baseline,
+                "qaoa_matched_baseline": qaoa_matched_baseline,
+                "num_customers": num_customers,
+                "permutation_count": candidate_perms_count,
+                "snapshot_timestamp": prob.timestamp,
+            }
+
+        best_route_dict = (
+            qpso_dict if qpso_res.success else (
+                qaoa_dict if qaoa_res.success else dijkstra_dict
+            )
+        )
+
+        compare_dict = {
+            "success": bool(valid_algos),
+            "problem": prob.to_dict(),
+            "snapshot_timestamp": prob.timestamp,
+            "dijkstra": dijkstra_dict,
+            "qaoa": qaoa_dict,
+            "qpso": qpso_dict,
+            "analysis": {
+                "comparison_basis": (
+                    f"Dynamic VRP evaluation across {num_customers} customer destinations ({candidate_perms_count} candidate permutations) "
+                    f"derived strictly from live algorithm executions on single SUMO traffic snapshot G(t) at t = {prob.timestamp:.1f}s."
+                ),
+                "outcome": outcome,
+                "algorithms": algos,
+            }
+        }
+        for k, v in best_route_dict.items():
+            if k not in compare_dict:
+                compare_dict[k] = v
+
+        latest_route_result = compare_dict
+        return compare_dict
+
+    return None
 
 
 def _simulation_update_payload(step_res: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -156,13 +288,18 @@ class QPSOVRPRequest(VRPRequest):
     num_particles: int = 40
     max_iter: int = 50
 
+class CompareVRPRequest(VRPRequest):
+    reps: int = 1
+    shots: int = 1024
+    num_particles: int = 40
+    max_iter: int = 50
+
 # API Endpoints
 @app.get("/api/network")
 def get_network():
     """
     Returns full network topology (nodes, edges, boundaries) for frontend canvas visualization.
     """
-    # Sample nodes & edges to avoid huge JSON payload if required, or send full geometry
     edges_payload = []
     for edge_id, meta in dt_graph.edge_metadata.items():
         edges_payload.append({
@@ -179,7 +316,6 @@ def get_network():
         for node_id, pos in dt_graph.node_positions.items()
     }
 
-    # Bounding box
     xs = [p[0] for p in dt_graph.node_positions.values()]
     ys = [p[1] for p in dt_graph.node_positions.values()]
     bounds = {
@@ -262,8 +398,13 @@ def _run_qpso(req: QPSORouteRequest) -> Dict[str, Any]:
 @app.post("/api/route/calculate", include_in_schema=False)
 def calculate_dijkstra_route(req: RouteRequest):
     """Run only the exact Dijkstra baseline on the current traffic snapshot."""
-    global active_route_req, latest_route_result
+    global active_route_req, active_vrp_req, latest_route_result
     active_route_req = {'origin': req.origin_node, 'destination': req.destination_node}
+    active_vrp_req = {
+        'origin': req.origin_node,
+        'destinations': [req.destination_node],
+        'algorithm': 'dijkstra',
+    }
     res = _run_dijkstra(req)
     latest_route_result = res
     return res
@@ -271,8 +412,15 @@ def calculate_dijkstra_route(req: RouteRequest):
 @app.post("/api/route/qaoa")
 def calculate_qaoa_route(req: QAOARouteRequest):
     """Run only the Qiskit QAOA route-selection circuit on the current snapshot."""
-    global active_route_req, latest_route_result
+    global active_route_req, active_vrp_req, latest_route_result
     active_route_req = {'origin': req.origin_node, 'destination': req.destination_node}
+    active_vrp_req = {
+        'origin': req.origin_node,
+        'destinations': [req.destination_node],
+        'algorithm': 'qaoa',
+        'reps': req.reps,
+        'shots': req.shots,
+    }
     qaoa_result = _run_qaoa(req)
     if qaoa_result.get('success'):
         latest_route_result = qaoa_result
@@ -281,8 +429,15 @@ def calculate_qaoa_route(req: QAOARouteRequest):
 @app.post("/api/route/qpso")
 def calculate_qpso_route(req: QPSORouteRequest):
     """Run Quantum-Behaved Particle Swarm Optimization (QPSO) route solver."""
-    global active_route_req, latest_route_result
+    global active_route_req, active_vrp_req, latest_route_result
     active_route_req = {'origin': req.origin_node, 'destination': req.destination_node}
+    active_vrp_req = {
+        'origin': req.origin_node,
+        'destinations': [req.destination_node],
+        'algorithm': 'qpso',
+        'num_particles': req.num_particles,
+        'max_iter': req.max_iter,
+    }
     qpso_result = _run_qpso(req)
     if qpso_result.get('success'):
         latest_route_result = qpso_result
@@ -311,8 +466,15 @@ def analyze_route_algorithms(req: RouteRequest):
 @app.post("/api/route/compare", include_in_schema=False)
 def compare_route_algorithms(req: QAOARouteRequest):
     """3-Way combined comparison endpoint executing Dijkstra, QAOA, and QPSO."""
-    global active_route_req, latest_route_result
+    global active_route_req, active_vrp_req, latest_route_result
     active_route_req = {'origin': req.origin_node, 'destination': req.destination_node}
+    active_vrp_req = {
+        'origin': req.origin_node,
+        'destinations': [req.destination_node],
+        'algorithm': 'compare',
+        'reps': req.reps,
+        'shots': req.shots,
+    }
 
     dijkstra_result = _run_dijkstra(req)
     qaoa_result = _run_qaoa(req)
@@ -337,7 +499,9 @@ def inject_incident(req: IncidentRequest):
     # Recalculate route if active
     global latest_route_result
     route_algorithm_runs.clear()
-    if active_route_req:
+    if active_vrp_req:
+        run_active_vrp_solver()
+    elif active_route_req:
         latest_route_result = router.find_shortest_path(
             dt_graph, active_route_req['origin'], active_route_req['destination']
         )
@@ -356,7 +520,9 @@ def clear_incident(req: ClearIncidentRequest):
 
     global latest_route_result
     route_algorithm_runs.clear()
-    if active_route_req:
+    if active_vrp_req:
+        run_active_vrp_solver()
+    elif active_route_req:
         latest_route_result = router.find_shortest_path(
             dt_graph, active_route_req['origin'], active_route_req['destination']
         )
@@ -414,94 +580,76 @@ def _build_vrp_problem_instance(req: VRPRequest) -> ProblemInstance:
 @app.post("/api/vrp/dijkstra")
 def solve_vrp_dijkstra(req: VRPRequest):
     """Runs Dijkstra exact VRP solver on live snapshot G(t)."""
-    prob = _build_vrp_problem_instance(req)
-    res = dijkstra_vrp_solver.solve(prob)
-    global latest_route_result
-    latest_route_result = res.to_dict()
-    return res.to_dict()
+    global active_vrp_req
+    active_vrp_req = {
+        "origin": req.origin_node,
+        "destinations": req.destination_nodes,
+        "algorithm": "dijkstra",
+        "vehicle_capacity": req.vehicle_capacity,
+        "alpha": req.alpha,
+        "beta": req.beta,
+        "gamma": req.gamma,
+    }
+    return run_active_vrp_solver()
 
 @app.post("/api/vrp/qpso")
 def solve_vrp_qpso(req: QPSOVRPRequest):
     """Runs QPSO VRP swarm solver on live snapshot G(t)."""
-    prob = _build_vrp_problem_instance(req)
-    res = qpso_vrp_solver.solve(prob, num_particles=req.num_particles, max_iter=req.max_iter)
-    global latest_route_result
-    latest_route_result = res.to_dict()
-    return res.to_dict()
+    global active_vrp_req
+    active_vrp_req = {
+        "origin": req.origin_node,
+        "destinations": req.destination_nodes,
+        "algorithm": "qpso",
+        "vehicle_capacity": req.vehicle_capacity,
+        "alpha": req.alpha,
+        "beta": req.beta,
+        "gamma": req.gamma,
+        "num_particles": req.num_particles,
+        "max_iter": req.max_iter,
+    }
+    return run_active_vrp_solver()
 
 @app.post("/api/vrp/qaoa")
 def solve_vrp_qaoa(req: QAOAVRPRequest):
     """Runs QAOA VRP quantum solver on live snapshot G(t)."""
-    prob = _build_vrp_problem_instance(req)
-    res = qaoa_vrp_solver.solve(prob, reps=req.reps, shots=req.shots)
-    global latest_route_result
-    latest_route_result = res.to_dict()
-    return res.to_dict()
+    global active_vrp_req
+    active_vrp_req = {
+        "origin": req.origin_node,
+        "destinations": req.destination_nodes,
+        "algorithm": "qaoa",
+        "vehicle_capacity": req.vehicle_capacity,
+        "alpha": req.alpha,
+        "beta": req.beta,
+        "gamma": req.gamma,
+        "reps": req.reps,
+        "shots": req.shots,
+    }
+    return run_active_vrp_solver()
 
 @app.post("/api/vrp/compare")
-def compare_vrp_algorithms(req: QAOAVRPRequest):
+def compare_vrp_algorithms(req: CompareVRPRequest):
     """Runs 3-Way independent VRP comparison across Dijkstra, QPSO, and QAOA on snapshot G(t)."""
-    prob = _build_vrp_problem_instance(req)
-    dijkstra_res = dijkstra_vrp_solver.solve(prob)
-
-    qpso_req = QPSOVRPRequest(
-        origin_node=req.origin_node,
-        destination_nodes=req.destination_nodes,
-        alpha=req.alpha,
-        beta=req.beta,
-        gamma=req.gamma,
-        vehicle_capacity=req.vehicle_capacity
-    )
-    qpso_res = qpso_vrp_solver.solve(prob, num_particles=qpso_req.num_particles, max_iter=qpso_req.max_iter)
-    qaoa_res = qaoa_vrp_solver.solve(prob, reps=req.reps, shots=req.shots)
-
-    global latest_route_result
-    latest_route_result = (
-        qpso_res.to_dict() if qpso_res.success else (
-            qaoa_res.to_dict() if qaoa_res.success else dijkstra_res.to_dict()
-        )
-    )
-
-    algos = {
-        "dijkstra": dijkstra_res.to_dict(),
-        "qaoa": qaoa_res.to_dict(),
-        "qpso": qpso_res.to_dict()
+    global active_vrp_req
+    active_vrp_req = {
+        "origin": req.origin_node,
+        "destinations": req.destination_nodes,
+        "algorithm": "compare",
+        "vehicle_capacity": req.vehicle_capacity,
+        "alpha": req.alpha,
+        "beta": req.beta,
+        "gamma": req.gamma,
+        "num_particles": req.num_particles,
+        "max_iter": req.max_iter,
+        "reps": req.reps,
+        "shots": req.shots,
     }
-    valid_algos = {k: v for k, v in algos.items() if v.get("success")}
-
-    outcome = {}
-    if valid_algos:
-        lowest_cost = min(valid_algos.items(), key=lambda x: x[1]["total_cost"])[0]
-        lowest_time = min(valid_algos.items(), key=lambda x: x[1]["total_travel_time"])[0]
-        fastest_compute = min(valid_algos.items(), key=lambda x: x[1]["computation_time_ms"])[0]
-        outcome = {
-            "lowest_cost_algorithm": lowest_cost,
-            "lowest_travel_time_algorithm": lowest_time,
-            "fastest_computation_algorithm": fastest_compute,
-        }
-
-    return {
-        "success": bool(valid_algos),
-        "problem": prob.to_dict(),
-        "dijkstra": dijkstra_res.to_dict(),
-        "qaoa": qaoa_res.to_dict(),
-        "qpso": qpso_res.to_dict(),
-        "analysis": {
-            "comparison_basis": (
-                "Dynamic VRP route cost, travel time, distance, speed, and computation latency "
-                "derived strictly from live algorithm executions on single SUMO traffic snapshot G(t)."
-            ),
-            "outcome": outcome,
-            "algorithms": algos,
-        }
-    }
+    return run_active_vrp_solver()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Keep connection open and read optional incoming client messages
             data = await websocket.receive_text()
             try:
                 msg = json.loads(data)
@@ -524,12 +672,18 @@ async def simulation_loop():
     Background worker loop advancing SUMO step by step and broadcasting state updates.
     """
     global latest_route_result
+    last_reroute_time = -999.0
     while True:
         if sumo_mgr.is_running and not sumo_mgr.is_paused:
             step_res = sumo_mgr.step()
+            sim_time = step_res.get('sim_time', 0.0)
 
             # Recalculate route automatically on dynamic graph changes if route active
-            if active_route_req and step_res.get('sim_time', 0) % 5 == 0:
+            if active_vrp_req and (sim_time - last_reroute_time >= 3.0 or sim_time < last_reroute_time or last_reroute_time < 0):
+                last_reroute_time = sim_time
+                run_active_vrp_solver()
+            elif active_route_req and (sim_time - last_reroute_time >= 3.0 or sim_time < last_reroute_time or last_reroute_time < 0):
+                last_reroute_time = sim_time
                 latest_route_result = router.find_shortest_path(
                     dt_graph, active_route_req['origin'], active_route_req['destination']
                 )

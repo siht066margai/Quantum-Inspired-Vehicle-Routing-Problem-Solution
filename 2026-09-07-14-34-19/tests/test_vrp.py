@@ -157,6 +157,33 @@ class TestVRPPipeline(unittest.TestCase):
         self.assertEqual(dijkstra_1.total_cost, dijkstra_2.total_cost)
         self.assertEqual(dijkstra_1.visit_sequence, dijkstra_2.visit_sequence)
 
+    def test_multicustomer_vrp_search_space(self):
+        """Verify Dijkstra & QPSO evaluation across N=3 (3! = 6 perms) and N=4 (4! = 24 perms) customer VRP instances."""
+        nodes = list(self.dt_graph.graph.nodes())
+        origin = nodes[0]
+        c1, c2, c3 = nodes[4], nodes[8], nodes[14]
+
+        # N=3 VRP Instance
+        prob_3 = ProblemInstance(origin=origin, destinations=[c1, c2, c3], graph=self.dt_graph)
+        res_d3 = self.dijkstra_solver.solve(prob_3)
+        res_q3 = self.qpso_solver.solve(prob_3)
+
+        self.assertTrue(res_d3.success)
+        self.assertEqual(res_d3.solver_details["candidate_permutations_count"], 6)
+        self.assertTrue(res_q3.success)
+        self.assertEqual(len(res_q3.visit_sequence), 4)  # O + 3 customers
+
+        # N=4 VRP Instance
+        c4 = nodes[20]
+        prob_4 = ProblemInstance(origin=origin, destinations=[c1, c2, c3, c4], graph=self.dt_graph)
+        res_d4 = self.dijkstra_solver.solve(prob_4)
+        res_q4 = self.qpso_solver.solve(prob_4)
+
+        self.assertTrue(res_d4.success)
+        self.assertEqual(res_d4.solver_details["candidate_permutations_count"], 24)
+        self.assertTrue(res_q4.success)
+        self.assertEqual(len(res_q4.visit_sequence), 5)  # O + 4 customers
+
 
 if __name__ == "__main__":
     unittest.main()
